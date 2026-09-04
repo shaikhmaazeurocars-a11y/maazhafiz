@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exact Number Matcher - Invoice, Duty & Email</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 950px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #7f8c8d;
+            margin-bottom: 25px;
+            font-size: 14px;
+        }
+
+        .upload-section {
+            border: 2px dashed #2ecc71;
+            padding: 35px;
+            text-align: center;
+            border-radius: 6px;
+            background: #f0fbf5;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        .upload-section:hover {
+            background: #e2f7eb;
+            border-color: #27ae60;
+        }
+
+        .btn-print {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 20px;
+            display: none; 
+        }
+
+        .btn-print:hover {
+            background-color: #2980b9;
+        }
+
+        #status {
+            text-align: center;
+            font-weight: bold;
+            color: #e67e22;
+            margin: 15px 0;
+            padding: 10px;
+            background: #fdf2e9;
+            border-radius: 4px;
+        }
+
+        #preview-area {
+            margin-top: 30px;
+        }
+
+        .print-page {
+            background: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            padding: 10px;
+            text-align: center;
+            position: relative;
+        }
+
+        canvas, img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+        }
+
+        .page-label {
+            background: #2c3e50;
+            color: white;
+            padding: 6px;
+            font-size: 12px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .label-match {
+            background: #e74c3c;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+
+        /* PRINT MEDIA OPTIMIZATION */
+        @page {
+            size: A4 portrait;
+            margin: 0;
+        }
+
+        @media print {
+            html, body {
+                width: 210mm;
+                height: 297mm;
+                margin: 0;
+                padding: 0;
+                background: white;
+            }
+
+            .upload-section,
+            .btn-print,
+            h2,
+            .subtitle,
+            #status,
+            #progressBar,
+            #debug-area,
+            .page-label,
+            .label-match {
+                display: none !important;
+            }
+
+            .container,
+            #preview-area,
+            .print-page {
+                width: 210mm;
+                height: 297mm;
+                margin: 0;
+                padding: 0;
+                box-shadow: none;
+                border: none;
+                background: white;
+            }
+
+            .print-page {
+                page-break-after: always;
+                page-break-inside: avoid;
+            }
+
+            .print-page > img {
+                width: 210mm;
+                height: 297mm;
+                object-fit: contain;
+                border: none;
+                display: block;
+            }
+
+            .print-page * {
+                color: transparent !important;
+                background: transparent !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Invoice & Email Target Matcher</h2>
+    <div class="subtitle">Matches: Base Filename Number ➔ Duty # Text ➔ Email (Exact Sequential Output)</div>
+    
+    <div class="upload-section" onclick="document.getElementById('file-selector').click()">
+        <strong style="color: #27ae60; font-size: 16px;">Click here to select all Invoices and Emails together</strong>
+        <p style="margin: 5px 0 0 0; font-size: 13px; color: #555;">Select both types of PDFs together (Ctrl+A or multi-select)</p>
+        <input type="file" id="file-selector" accept=".pdf" multiple style="display:none;">
+    </div>
+
+    <div id="status">Waiting for files... Please upload your PDFs.</div>
+    <progress id="progressBar" value="0" max="100" style="width:100%; display:none; margin-bottom: 15px;"></progress>
+
+    <button class="btn-print" id="print-btn" onclick="window.print()">Print Collated Chain (PDF)</button>
+
+    <div id="debug-area" style="margin-top:20px; font-size:14px; color:#34495e;"></div>
+    <div id="preview-area"></div>
+</div>
+
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+    const fileSelector = document.getElementById('file-selector');
+    const statusDiv = document.getElementById('status');
+    const previewArea = document.getElementById('preview-area');
+    const progressBar = document.getElementById('progressBar');
+    const printBtn = document.getElementById('print-btn');
+
+    fileSelector.addEventListener('change', handleFileSelection);
+
+    function updateStatus(text) {
+        statusDiv.innerText = text;
+    }
+
+    function extractFirstLongNumber(value) {
+        if (!value) return null;
+        const match = value.match(/\d{7,10}/);
+        return match ? match[0] : null;
+    }
+
+    function extractAllLongNumbers(value) {
+        if (!value) return [];
+        return Array.from(new Set(value.match(/\d{7,10}/g) || []));
+    }
+
+    function extractDutyBaseNumber(text) {
+        if (!text) return null;
+        const match = text.match(/Duty\s*#\s*(\d{7,10})(?:[-\s]|$)/i);
+        return match ? match[1] : null;
+    }
+
+    function isEmailFile(fileName) {
+        return /mail|email/i.test(fileName);
+    }
+
+    function disposeCanvas(canvas) {
+        if (!canvas) return;
+        canvas.width = 0;
+        canvas.height = 0;
+    }
+
+    async function renderPdfPageAsJpeg(page) {
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: context, viewport }).promise;
+        const jpeg = canvas.toDataURL('image/jpeg', 0.85);
+        disposeCanvas(canvas);
+        return jpeg;
+    }
+
+    async function handleFileSelection(event) {
+        const files = Array.from(event.target.files);
+        if (files.length === 0) return;
+
+        previewArea.innerHTML = '';
+        document.getElementById('debug-area').innerHTML = '';
+        progressBar.style.display = 'block';
+        progressBar.value = 0;
+        printBtn.style.display = 'none';
+
+        let invoicesPool = [];
+        let emailsPool = [];
+        let globalLoadedHyperlinks = new Set();
+        let debugLog = [];
+
+        try {
+            for (let index = 0; index < files.length; index++) {
+                const file = files[index];
+                updateStatus(`Reading ${index + 1}/${files.length}: ${file.name}`);
+                const fileNameKey = extractFirstLongNumber(file.name);
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer), worker: false }).promise;
+                const isEmail = isEmailFile(file.name);
+
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    const page = await pdf.getPage(pageNum);
+                    const textContent = await page.getTextContent();
+                    const pageText = textContent.items.map(item => item.str).join(' ');
+                    const dutyBase = extractDutyBaseNumber(pageText);
+                    const pageNumbers = extractAllLongNumbers(pageText);
+
+                    const keys = new Set();
+                    if (fileNameKey) keys.add(fileNameKey);
+                    pageNumbers.forEach(num => keys.add(num));
+                    if (dutyBase) keys.add(dutyBase);
+
+                    const activeMasterKey = dutyBase || fileNameKey || pageNumbers[0] || null;
+                    const imgSrc = await renderPdfPageAsJpeg(page);
+                    const annotations = await page.getAnnotations();
+                    const hyperlinks = annotations
+                        .filter(item => item.subtype === 'Link' && item.url)
+                        .map(item => item.url)
+                        .filter(url => /\.(jpe?g|png|webp|gif)(?:$|\?)/i.test(url));
+
+                    const pageObject = {
+                        fileName: file.name,
+                        pageNum,
+                        imgSrc,
+                        activeMasterKey,
+                        keys: Array.from(keys),
+                        hyperlinks
+                    };
+
+                    if (isEmail) {
+                        emailsPool.push(pageObject);
+                        debugLog.push(`Email page ${file.name}#${pageNum} keys=[${pageObject.keys.join(', ')}]`);
+                    } else {
+                        invoicesPool.push(pageObject);
+                        debugLog.push(`Invoice page ${file.name}#${pageNum} activeKey=${activeMasterKey} keys=[${pageObject.keys.join(', ')}]`);
+                    }
+
+                    page.cleanup();
+                }
+
+                progressBar.value = ((index + 1) / files.length) * 50;
+            }
+
+            updateStatus('Building strict invoice → duty links → email chains...');
+            let totalRendered = 0;
+
+const dutyBlocks = [];
+let currentBlock = null;
+
+for (const invoicePage of invoicesPool) {
+    if (invoicePage.activeMasterKey) {
+        currentBlock = { key: invoicePage.activeMasterKey, pages: [invoicePage] };
+        dutyBlocks.push(currentBlock);
+    } else if (currentBlock && currentBlock.pages[0].fileName === invoicePage.fileName) {
+        currentBlock.pages.push(invoicePage);
+    } else {
+        currentBlock = { key: invoicePage.keys[0] || 'unknown', pages: [invoicePage] };
+        dutyBlocks.push(currentBlock);
+    }
+}
+
+for (const block of dutyBlocks) {
+    const key = block.key;
+
+    for (const invoicePage of block.pages) {
+        renderPage(previewArea, invoicePage.imgSrc, `Invoice: ${invoicePage.fileName} (Page ${invoicePage.pageNum})`, key);
+        totalRendered++;
+
+        const dutyLinks = invoicePage.hyperlinks;
+        let linkIndex = 1;
+        for (const link of dutyLinks) {
+            if (!globalLoadedHyperlinks.has(link)) {
+                globalLoadedHyperlinks.add(link);
+                renderExternalImage(previewArea, link, `Duty Link ${linkIndex} from Invoice Page ${invoicePage.pageNum}`, key);
+                totalRendered++;
+                linkIndex++;
+            }
+        }
+    }
+
+    // Matched email pages ab pura duty block khatam hone ke BAAD hi aayenge
+    if (key) {
+        const matchedEmails = emailsPool.filter(emailPage => emailPage.keys.includes(key));
+        if (matchedEmails.length > 0) {
+            debugLog.push(`Matched invoice ${block.pages[0].fileName}#${block.pages[0].pageNum} key=${key} to ${matchedEmails.length} email page(s)`);
+        } else {
+            debugLog.push(`No email match found for invoice ${block.pages[0].fileName}#${block.pages[0].pageNum} key=${key}`);
+        }
+        matchedEmails.forEach(emailPage => {
+            renderPage(previewArea, emailPage.imgSrc, `Matched Email: ${emailPage.fileName} (Page ${emailPage.pageNum})`, key);
+            totalRendered++;
+        });
+    }
+}
+            progressBar.value = 100;
+            updateStatus(`Done. Rendered ${totalRendered} pages in strict chain order.`);
+            document.getElementById('debug-area').innerHTML = `<strong>Debug log:</strong><pre style="white-space: pre-wrap; margin-top:10px;">${debugLog.join('\n')}</pre>`;
+            printBtn.style.display = 'block';
+        } catch (error) {
+            console.error(error);
+            updateStatus('Parsing failed. Please verify your PDFs and retry.');
+            document.getElementById('debug-area').innerText = `Error: ${error.message || error}`;
+        }
+    }
+
+    function renderPage(targetArea, src, labelText, matchCode) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'print-page';
+        wrapper.innerHTML = `
+            <div class="page-label">
+                <span>${labelText}</span>
+                ${matchCode ? `<span class="label-match">Match: ${matchCode}</span>` : ''}
+            </div>
+            <img src="${src}" alt="${labelText}">
+        `;
+        targetArea.appendChild(wrapper);
+    }
+
+    function renderExternalImage(targetArea, url, labelText, matchCode) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'print-page';
+
+        const label = document.createElement('div');
+        label.className = 'page-label';
+        label.innerHTML = `<span>${labelText}</span>${matchCode ? `<span class="label-match">Match: ${matchCode}</span>` : ''}`;
+        wrapper.appendChild(label);
+
+        const img = document.createElement('img');
+        img.crossOrigin = 'anonymous';
+        img.loading = 'lazy';
+        img.src = url;
+        img.alt = labelText;
+        img.onerror = () => {
+            label.innerHTML = `<span>${labelText} <strong style="color:#ff8282;">(failed to load)</strong></span>${matchCode ? `<span class="label-match">Match: ${matchCode}</span>` : ''}`;
+        };
+
+        wrapper.appendChild(img);
+        targetArea.appendChild(wrapper);
+    }
+</script>
+
+</body>
+</html>
